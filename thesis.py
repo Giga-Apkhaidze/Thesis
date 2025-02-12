@@ -31,9 +31,7 @@ def extract_tonnetz_from_wav(directory):
                 filepath = os.path.join(directory, filename)
                 try:
                     data, sample_rate = librosa.load(filepath)
-                    tonnetz = librosa.feature.tonnetz(y=data, sr=sample_rate)
-                    # Transpose to get time steps as the first dimension
-                    tonnetz = tonnetz.T
+                    tonnetz = np.array(librosa.feature.tonnetz(y=data, sr=sample_rate))
                     tonnetz_list.append(tonnetz)
                 except Exception as e:
                     print(f"Error reading WAV file {filename}: {e}")
@@ -42,7 +40,7 @@ def extract_tonnetz_from_wav(directory):
     return tonnetz_list
 
 def extract_tonnetz_features(data, sample_rate):
-    tonnetz = librosa.feature.tonnetz(y=data, sr=sample_rate)
+    tonnetz = np.array(librosa.feature.tonnetz(y=data, sr=sample_rate))
     return tonnetz
 
 def populate_data(real_files_content, fake_files_content):
@@ -70,43 +68,49 @@ def lstm_tonnetz_model():
     real_dataset_directory = 'C:/Users/giga-/OneDrive/Desktop/Thesis/FakeOrReal dataset/for-original/training/real'
     fake_dataset_directory = 'C:/Users/giga-/OneDrive/Desktop/Thesis/FakeOrReal dataset/for-original/training/fake'
 
-    X_train_tonnetz = extract_tonnetz_from_wav(real_dataset_directory)
-    y_train_tonnetz = [1] * len(X_train_tonnetz)
-    X_train_tonnetz.extend(extract_tonnetz_from_wav(fake_dataset_directory))
-    y_train_tonnetz.extend([0] * (len(X_train_tonnetz) - len(y_train_tonnetz)))
+    X_real = extract_tonnetz_from_wav(real_dataset_directory)
+    X_fake = extract_tonnetz_from_wav(fake_dataset_directory)
 
-    # LSTM (Long Short-Term Memory) layers are designed to work with sequential data, and their input shape follows this pattern: (batch_size, timesteps, features)
+    # Find the maximum dimensions across all Tonnetz arrays
+    max_rows = max(arr.shape[0] for arr in X_real + X_fake)
+    max_cols = max(arr.shape[1] for arr in X_real + X_fake)
 
-    # transform the data so that all arrays have the same length
-    # X_train_tonnetz = pad_and_stack(X_train_tonnetz)
+    # Pad each Tonnetz array to the maximum dimensions
+    def pad_tonnetz(tonnetz, max_rows, max_cols):
+        rows_pad = max_rows - tonnetz.shape[0]
+        cols_pad = max_cols - tonnetz.shape[1]
+        return np.pad(tonnetz, ((0, rows_pad), (0, cols_pad)), 'constant')
 
-    # Convert training data to numpy arrays
-    # X_train_tonnetz = np.array(X_train_tonnetz, dtype=np.float32)
-    # y_train_tonnetz = np.array(y_train_tonnetz, dtype=np.int32)
+    X_real = [pad_tonnetz(x, max_rows, max_cols) for x in X_real]
+    X_fake = [pad_tonnetz(x, max_rows, max_cols) for x in X_fake]
 
+    X_tonnetz = X_real + X_fake
+    y_tonnetz = [1] * len(X_real) + [0] * len(X_fake)
+
+    X_tonnetz = np.array(X_tonnetz)
+    y_tonnetz = np.array(y_tonnetz)
+
+    # Reshape data to 3D array (samples, timesteps, features)
+    # X_tonnetz = X_tonnetz.reshape((X_tonnetz.shape[0], X_tonnetz.shape[1], 1))
+
+    X_train_tonnetz = X_tonnetz[:int(0.7 * len(X_tonnetz))] # 70% of the data
+    y_train_tonnetz = y_tonnetz[:int(0.7 * len(y_tonnetz))]   # 70% of the data
+
+    X_validation_tonnetz = X_tonnetz[int(0.7 * len(X_tonnetz)):int(0.85 * len(X_tonnetz))] # 15% of the data
+    y_validation_tonnetz = y_tonnetz[int(0.7 * len(y_tonnetz)):int(0.85 * len(y_tonnetz))]   # 15% of the data
+
+    X_test_tonnetz = X_tonnetz[int(0.85 * len(X_tonnetz)):] # 15% of the data
+    y_test_tonnetz = y_tonnetz[int(0.85 * len(y_tonnetz)):]   # 15% of the data
+
+    print('X_tonnetz_entry_shape:', X_tonnetz[0].shape)
+    print('X_tonnetz_shape:', X_tonnetz.shape)
     # Create LSTM model with a simple architecture
     model = Sequential([
-        LSTM(32),  # 6 is the number of features in tonnetz
+        LSTM(32),
         Dense(1, activation='sigmoid')
     ])
 
     model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-
-    # Load and process validation data from different directories
-    val_real_dir = 'C:/Users/giga-/OneDrive/Desktop/Thesis/FakeOrReal dataset/for-original/validation/real'
-    val_fake_dir = 'C:/Users/giga-/OneDrive/Desktop/Thesis/FakeOrReal dataset/for-original/validation/fake'
-
-    X_validation_tonnetz = extract_tonnetz_from_wav(val_real_dir)
-    y_validation_tonnetz = [1] * len(X_validation_tonnetz)
-    X_validation_tonnetz.extend(extract_tonnetz_from_wav(val_fake_dir))
-    y_validation_tonnetz.extend([0] * (len(X_validation_tonnetz) - len(y_validation_tonnetz)))
-
-    # transform the data so that all arrays have the same length
-    # X_validation_tonnetz = pad_and_stack(X_validation_tonnetz)
-
-    # print(X_train_tonnetz.shape)
-    # print('-' * 50 + '\n')
-    # print(X_validation_tonnetz.shape)
 
     trained_model = model.fit(X_train_tonnetz, y_train_tonnetz, epochs=10, batch_size=32, validation_data=(X_validation_tonnetz, y_validation_tonnetz))
 
@@ -117,25 +121,16 @@ def lstm_tonnetz_model():
     print(f"Final training loss: {trained_model.history['loss'][-1]:.4f}")
     print(f"Final validation loss: {trained_model.history['val_loss'][-1]:.4f}")
 
-    # Load and process testing data from different directories
-    real_test_dir = 'C:/Users/giga-/OneDrive/Desktop/Thesis/FakeOrReal dataset/for-original/testing/real'
-    fake_test_dir = 'C:/Users/giga-/OneDrive/Desktop/Thesis/FakeOrReal dataset/for-original/testing/fake'
-
-    X_test_tonnetz = extract_tonnetz_from_wav(real_test_dir)
-    X_test_tonnetz.extend(extract_tonnetz_from_wav(fake_test_dir))
-
-    # transform the data so that all arrays have the same length
-    # X_test_tonnetz = pad_and_stack(X_test_tonnetz)
-
-    # Convert to numpy array and ensure correct type
-    # X_test_tonnetz = np.array(X_test_tonnetz, dtype=np.float32)
-
     # Get predictions
     predictions = model.predict(X_test_tonnetz)
 
     print('-' * 50 + '\n')
     print('Predictions:', predictions)
     print('-' * 50 + '\n')
+
+    accuracy_score = model.evaluate(x=X_test_tonnetz,y=y_test_tonnetz)
+
+    print('Accuracy:', str(accuracy_score[1] * 100) + '%')
 
     plt.figure(figsize=(12, 4))
 
